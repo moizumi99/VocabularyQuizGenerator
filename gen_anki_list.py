@@ -1,6 +1,8 @@
 #coding: utf-8
 import codecs, sys
 
+#Usage gen_anki_list kindlenote.html output.txt eiijorfilename.txt
+
 # Constants
 removelist = [u'◆', u'\ ・', u'【変化】', u'【分節】', u'【＠】']
 
@@ -8,7 +10,8 @@ def FindDefinitions(word, dic, startpoint=0):
     deflist = []
     found = False
 
-    # find the first element that meets the condition. Don't want to evaluate all elements, so starting from j
+    # find the first element that meets the condition
+    # Don't want to evaluate all elements, so starting from 'startpoint'
     i = startpoint
     j = (i-1+len(dic)) % len(dic)
     while(i!=j and (not dic[i].startswith(word+' ///'))):
@@ -57,17 +60,16 @@ with codecs.open(title, 'w', 'utf-8') as fout:
     j = 0
     for word in txt:
         ii = word.find(u'<div class=\'noteText\'>')
-        if ii<0:
+        if ii < 0:
             continue
-        word = word[ii+22:]
+        word = word[ii + 22:]
         ii = word.find(u'</div>')
-        if ii<0:
+        if ii < 0:
             continue
         word = word[:ii].rstrip(',').rstrip('.').rstrip()
         defs, word, j = FindDefinitions(word, dic, j)
         if len(defs)==0:
             print(word+' not found')
             continue
-        outtxt = word.strip()
-        outtxt = outtxt + "\t" + (','.join(defs)) + "\n"
+        outtxt = word.strip() + "\t" + ('<br>'.join(defs)) + "\n"
         fout.write(outtxt)
