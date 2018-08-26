@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!c:\Bin\python36\python.exe
 # -*- coding: utf-8 -*-
 
 """
@@ -31,7 +31,7 @@ class VocabularyFiles:
     def ReadKindleBookmakFile(self, fname):
         if fname:
             try:
-                with open(fname, 'r') as f:
+                with open(fname, 'r', encoding="utf8") as f:
                     vocab_html = f.readlines()
             except (FileNotFoundError, UnicodeDecodeError, IOError) as e:
                 self.error_message = "Error reading " + fname

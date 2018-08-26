@@ -7,7 +7,7 @@ def date():
 def write(txt):
     log_file = str(Path.cwd()) + "/log.txt"
     try:
-        with open(log_file, 'a') as log_file:
+        with open(log_file, 'a', encoding='utf8') as log_file:
             log_file.write(txt)
             log_file.write("\n")
     except IOError:
