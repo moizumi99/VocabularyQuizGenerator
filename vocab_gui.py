@@ -1,4 +1,3 @@
-#!c:\Bin\python36\python.exe
 # -*- coding: utf-8 -*-
 
 """
@@ -335,7 +334,7 @@ class CreateTestMainWindow(QMainWindow):
         self.show()
 
     def openBookmark(self):
-        fname = QFileDialog.getOpenFileName(self, 'Kindle Bookmark File', self.ini_file.cur_dir, "HTML files (*.html)")
+        fname = QFileDialog.getOpenFileName(self, 'Please Open Kindle Bookmark File', self.ini_file.cur_dir, "HTML files (*.html)")
 
         if not fname[0]:
             self.updateStatus()
@@ -356,7 +355,7 @@ class CreateTestMainWindow(QMainWindow):
         self.updateStatus()
 
     def openDictionary(self):
-        fname = QFileDialog.getOpenFileName(self, 'Eijiro export file', self.ini_file.dic_file, "Text files (*.txt | *.csv)")
+        fname = QFileDialog.getOpenFileName(self, 'Please open a dictionary file exported from Eijiro', self.ini_file.dic_file, "Text files (*.txt | *.csv)")
         if not fname[0]:
             self.updateStatus()
             return False
