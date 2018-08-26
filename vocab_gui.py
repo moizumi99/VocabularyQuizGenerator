@@ -13,18 +13,20 @@ Last edited: August 2018
 
 import sys, codecs
 from pathlib import Path
-from PyQt5.QtWidgets import QMainWindow, QApplication, QWidget
-from PyQt5.QtWidgets import QAction, qApp, QMessageBox, QFileDialog, QTextBrowser
+from PyQt5.QtWidgets import QMainWindow, QApplication, QWidget, QTableWidgetItem
+from PyQt5.QtWidgets import QAction, qApp, QMessageBox, QFileDialog, QTableWidget
+import log
 
 class VocabularyFiles:
     """Stores file related information"""
 
     def __init__(self):
-        self.vocab_list = []
+        self.word_list = []
         self.dictionary_text = ""
         self.quiz = {}
         self.unused_words = []
         self.error_message = ""
+        self.report_text = ""
 
     def ReadKindleBookmakFile(self, fname):
         if fname:
@@ -35,7 +37,7 @@ class VocabularyFiles:
                 self.error_message = "Error reading " + fname
                 self.error_message += "\n" + str(e)
                 return False
-            self.vocab_list = ExtractWords(vocab_html)
+            self.word_list = ExtractWords(vocab_html)
         return True
 
     def ReadDictionaryFile(self, fname):
@@ -46,33 +48,54 @@ class VocabularyFiles:
             self.error_message = "Error opening " + fname
             self.error_message += "\n" + str(e)
             return False
-        cnt = 0
-        for line in self.dictionary_text:
-            print(line)
-            cnt += 1
-            if (cnt > 100):
-                break
-        return True
+        if self.dictionary_text:
+            return True
+        else:
+            return False
 
-    def CreateTest(self):
+    def CreateTest(self, statusBar):
         start_point = 0
         self.quiz = {}
-        self.unused_words = []
-        for word in self.vocab_list:
-            defs, word, start_point = FindDefinitions(word, self.dictionary_text, start_point)
+        undefined = 0
+        word_list = []
+        total_number = len(self.word_list)
+        word_count = 0
+        self.report_text = ""
+        statusBar.showMessage("{:4d} out of {:4d} words processed".format(word_count, total_number))
+        for word in self.word_list:
+            variations = makeVariations(word)
+            for search_word in variations:
+                defs, found_word, start_point = FindDefinitions(search_word, self.dictionary_text, start_point)
+                if defs:
+                    break
             if defs:
-                self.quiz[word] = defs
+                self.quiz[found_word] = defs
+                word_list.append(found_word)
+                if word != found_word:
+                    self.report_text += found_word + " is used instead of " + word + ".\n"
             else:
-                self.unused_words.append(word)
-        print(str(len(self.vocab_list) - len(self.unused_words)) + " words found")
-        print(str(len(self.unused_words)) + " words not found")
+                self.quiz[word] = [""]
+                word_list.insert(0, word)
+                self.report_text += word + " was not found.\n"
+                undefined += 1
+            word_count += 1
+            statusBar.showMessage("{:4d} out of {:4d} words processed".format(word_count, total_number))
+        self.word_list = word_list
+        self.report_text = "Quiz Created Successfully\n\n" + self.report_text
+        self.report_text += "\n Total " + str(word_count - undefined) + " words found.\n"
+        self.report_text += "Definitions for " + str(undefined) + " words not found.\n"
+        self.report_text += "\n You can export the test now"
+        log.log(self.report_text)
+        return True
     
     def ExportQuizFile(self, fname):
         try:
             with codecs.open(fname, 'w', 'utf-8') as fout:
-                for word, defs in self.quiz.items():
-                    outtxt = word.strip() + "\t" + ('<br>'.join(defs)) + "\n"
-                    fout.write(outtxt)
+                for word in self.word_list:
+                    defs = self.quiz[word]
+                    if defs:
+                        outtxt = word.strip() + "\t" + ('<br>'.join(defs)) + "\n"
+                        fout.write(outtxt)
             return True
         except IOError as e:
             self.error_message = "Error opening " + fname
@@ -80,35 +103,70 @@ class VocabularyFiles:
             return False
         return False
 
-def FindDefinitions(word, dic, start_point=0):
+def makeVariations(word):
+    word_list = [word]
+    if word[-1] == "s" and 1 < len(word):
+        word_list.append(word[:-1])
+    if word[-2:] == "es" and 2 < len(word):
+        word_list.append(word[:-2])
+    word_list.extend([switchCapitalization(x) for x in word_list])
+    if word_list[0].find('-') >= 0:
+        word_list.extend([x.replace('-', ' ') for x in word_list])
+    
+    return word_list
+
+def switchCapitalization(word):
+    if word[0].isupper():
+        result = word.lower()
+    else:
+        result = word.capitalize()
+    return result
+        
+def FindDefinitions(word, dic, start_point=0, remove_hints=False):
     REMOVE_LIST = [u'◆', u'\ ・', u'【変化】', u'【分節】', u'【＠】']
     
     deflist = []
     # find the first element that meets the condition
     # Don't want to evaluate all elements, so starting from 'startpoint'
     index = start_point
-    prev_start_point = (index - 1 + len(dic)) % len(dic)
-    while(index != prev_start_point and (not dic[index].startswith(word+' ///'))):
+    end_point = (start_point - 1) % len(dic)
+    while (index != end_point) and (not dic[index].startswith(word+' ///')):
         index = (index + 1) % len(dic)
-    if index != prev_start_point: # found
-        l = dic[index][len(word)+4:]
-        for r in REMOVE_LIST:
-            ii = l.find(r)
-            l = l[:ii] if (ii >= 0) else l
-        for d in l.split('\\'):
-            if 0 <= d.find(u'＝<→') < d.find(u'>'):
-                dl, _, _ = FindDefinitions(d[d.find(u'＝<→') + 3:d.find(u'>')], dic)
+    if not dic[index].startswith(word+' ///'): # not found
+        return deflist, word, start_point
+    # found 
+    l = dic[index][len(word)+4:]
+    for r in REMOVE_LIST:
+        ii = l.find(r)
+        l = l[:ii] if (ii >= 0) else l
+    if remove_hints:
+        # remove << >> that contains English words as they may be plural forms
+        # remove () that contains English words as they may be a big hint
+        for letter_index in range(2):
+            left, right = [(u'《', u'》'), ('(', ')')][letter_index]
+            search_pos = 0
+            while(True):
+                i1, i2 = l.find(left, search_pos), l.find(right, search_pos)
+                if not (0 <= i1 < i2):
+                    break
+                if l[i1+1:i2].isalpha():
+                    l = l[:i1] + l[i2+1:]
+                search_pos = i2 + 2
+    replaced_word_list = []
+    for d in l.split('\\'):
+        # reference to another definition
+        i1, i2 =  d.find(u'<→'), d.find(u'>')
+        if 0 <= i1 < i2:
+            new_word = d[i1 + 2:i2]
+            if new_word not in replaced_word_list:
+                log.log(word + " is referred to " + new_word)
+                dl, _, _ = FindDefinitions(d[i1 + 2:i2], dic, start_point)
                 deflist.extend(dl)
-            elif d.strip():
-                deflist.append(d.strip())
-    else: # word not found, try plural
-        if (word[-1] == 's'):
-            deflist, plural, _ = FindDefinitions(word[:-1], dic)
-            if (len(deflist)>0):
-                print(word+' not found. ' + plural + ' is used instead.')
-                word = plural
-    prev_start_point = (index + 1) % len(dic) # next starting point
-    return deflist, word, prev_start_point
+                replaced_word_list.append(new_word)
+        elif d.strip():
+            deflist.append(d.strip())
+    new_start_point = (index + 1) % len(dic) # next starting point
+    return deflist, word, new_start_point
 
 
 def ExtractWords(html_text):
@@ -125,13 +183,22 @@ def ExtractWords(html_text):
             continue
         word = line[:index].rstrip(',').rstrip('.').rstrip()
         word_list.append(word)
-    print(str(len(word_list)) + " words extracted from " + str(len(html_text)) + " lines")
+    log.log(str(len(word_list)) + " words extracted from " + str(len(html_text)) + " lines")
     return word_list
 
 def validate_dir(target_dir):
     try:
         new_path = Path(target_dir)
         if new_path.is_dir():
+            return True
+    except IOError:
+        return False
+    return False
+
+def validate_file(target_file):
+    try:
+        new_path = Path(target_file)
+        if new_path.is_file():
             return True
     except IOError:
         return False
@@ -144,7 +211,7 @@ class IniFile:
     
     def __init__(self):
         self.cur_dir = str(Path.home())
-        self.dic_dir = str(Path.home())
+        self.dic_file = ""
         self.exp_dir = str(Path.home())
         self.x = 800
         self.y = 800
@@ -158,49 +225,50 @@ class IniFile:
         self.height = height
 
     def readIniFile(self):
-        ini_file_name = str(Path.home()) + "/" + self.INIT_FILE_NAME
+        ini_file_name = str(Path.cwd()) + "/" + self.INIT_FILE_NAME
         try:
             with open(ini_file_name, 'r') as f:
                 self.set_new_cur_dir(f.readline().strip())
-                self.set_new_dic_dir(f.readline().strip())
+                self.set_new_dic_file(f.readline().strip())
                 self.set_new_exp_dir(f.readline().strip())
                 self.x = int(f.readline())
                 self.y = int(f.readline())
                 self.width = int(f.readline())
                 self.height = int(f.readline())
+            log.log("Inifile read.")
         except (FileNotFoundError, ValueError, IOError) as e:
             self.writeIniFile()
-            print(str(e))
+            log.warn(str(e))
 
     def writeIniFile(self):
-        ini_file_name = str(Path.home()) + "/" + self.INIT_FILE_NAME
+        ini_file_name = str(Path.cwd()) + "/" + self.INIT_FILE_NAME
         try:
             with open(ini_file_name, 'w') as f:
                 f.write(self.cur_dir + "\n")
-                f.write(self.dic_dir + "\n")
+                f.write(self.dic_file + "\n")
                 f.write(self.exp_dir + "\n")
                 f.write(str(self.x) + "\n")
                 f.write(str(self.y) + "\n")
                 f.write(str(self.width) + "\n")
                 f.write(str(self.height) + "\n")
+            log.log("Inifile written.")
         except IOError as e:
-            print(str(e))
+            log.warn(str(e))
 
     def set_new_cur_dir(self, new_dir):
         if validate_dir(new_dir):
             self.cur_dir = new_dir
-        print("New cur_dir = " + self.cur_dir)
+        log.log("New cur_dir = " + self.cur_dir)
     
-    def set_new_dic_dir(self, new_dir):
-        if validate_dir(new_dir):
-            self.dic_dir = new_dir
-        print("New dir_dir = " + self.dic_dir)
+    def set_new_dic_file(self, new_file):
+        if validate_file(new_file):
+            self.dic_file = new_file
+        log.log("New dic_file = " + self.dic_file)
 
     def set_new_exp_dir(self, new_dir):
         if validate_dir(new_dir):
             self.exp_dir = new_dir
-        print("New exp_dir = " + self.exp_dir)
-
+        log.log("New exp_dir = " + self.exp_dir)
 
 class CreateTestMainWindow(QMainWindow):
     """Main Window for creating vocabulary test"""
@@ -210,6 +278,8 @@ class CreateTestMainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
+        log.date()
+        log.log("Application started.")
         self.ini_file = IniFile()
         try:
             self.ini_file.readIniFile()
@@ -217,26 +287,27 @@ class CreateTestMainWindow(QMainWindow):
             self.ShowErrorMessage("Ini File Access Error", str(e))
         self.vocabulary_files = VocabularyFiles()
         self.initUI()
+        self.tryToReadDictionary()
 
-        
     def initUI(self):
-
-        self.textBrowser = QTextBrowser()
-        self.setCentralWidget(self.textBrowser)
-        self.statusBar()
+        self.tableWidget = QTableWidget()
+        self.tableWidget.setColumnCount(2)
+        self.tableWidget.setRowCount(4)
+        self.setCentralWidget(self.tableWidget)
+        self.statusBar = self.statusBar()
         
-        openAct = QAction('&OpenKindleBookmark', self)
-        openAct.setShortcut('Ctrl+O')
-        openAct.setStatusTip('Open Kindle Bookmark File')
-        openAct.triggered.connect(self.openBookmark)
+        self.openAct = QAction('&OpenKindleBookmark', self)
+        self.openAct.setShortcut('Ctrl+O')
+        self.openAct.setStatusTip('Open Kindle Bookmark File')
+        self.openAct.triggered.connect(self.openBookmark)
         
         openDictAct = QAction('&OpenDictionary', self)
         openDictAct.setStatusTip('Open Dictionary Text File')
         openDictAct.triggered.connect(self.openDictionary)
 
-        exportQuizAct = QAction('&Export', self)
-        exportQuizAct.setStatusTip('Export Quiz to a file')
-        exportQuizAct.triggered.connect(self.exportQuiz)
+        self.exportQuizAct = QAction('&Export', self)
+        self.exportQuizAct.setStatusTip('Export Quiz to a file')
+        self.exportQuizAct.triggered.connect(self.exportQuiz)
         
         exitAct = QAction('&Exit', self)
         exitAct.setShortcut('Ctrl+Q')
@@ -245,66 +316,174 @@ class CreateTestMainWindow(QMainWindow):
 
         menubar = self.menuBar()
         fileMenu = menubar.addMenu('&File')
-        fileMenu.addAction(openAct)
+        fileMenu.addAction(self.openAct)
         fileMenu.addAction(openDictAct)
-        fileMenu.addAction(exportQuizAct)
+        fileMenu.addAction(self.exportQuizAct)
         fileMenu.addAction(exitAct)
 
-        createAct = QAction('&CreateAnkiTest', self)
-        createAct.setStatusTip('Create Anki test')
-        createAct.triggered.connect(self.createTest)
+        self.createAct = QAction('&CreateAnkiTest', self)
+        self.createAct.setStatusTip('Create Anki test')
+        self.createAct.triggered.connect(self.createTest)
 
         createMenu = menubar.addMenu('&CreateTest')
-        createMenu.addAction(createAct)
+        createMenu.addAction(self.createAct)
         
         self.setGeometry(self.ini_file.width, self.ini_file.height, self.ini_file.x, self.ini_file.y)
         self.setWindowTitle('Vocab Quiz')
-        # self.setWindowIcon(QIcon('web.png'))        
+        # self.setWindowIcon(QIcon('web.png'))
+        self.updateStatus()
         self.show()
 
     def openBookmark(self):
-        fname = QFileDialog.getOpenFileName(self, 'Kindle Bookmark File', self.ini_file.cur_dir)
+        fname = QFileDialog.getOpenFileName(self, 'Kindle Bookmark File', self.ini_file.cur_dir, "HTML files (*.html)")
 
         if not fname[0]:
+            self.updateStatus()
             return
+        parent_path = str(Path(fname[0]).parent.absolute())
+        self.ini_file.set_new_cur_dir(parent_path)
         if not self.vocabulary_files.ReadKindleBookmakFile(fname[0]):
             self.ShowErrorMessage("Book Mark Open Fail", self.vocabulary_files.error_message)
+            self.updateStatus()
             return
-        self.textBrowser.setText("\n".join(self.vocabulary_files.vocab_list))
-        p = Path(fname[0]).parent
-        self.ini_file.set_new_cur_dir(str(p.absolute() ))
+        log.log("Bookmark file " + fname[0] + " read.")
+        self.showTable()
+        if not self.vocabulary_files.word_list:
+            self.ShowErrorMessage("Vocabulary list empty", "The read file had no vocabulary words. Possibly you read a wrong file");
+            self.updateStatus()
+            return
+        self.createTest()
+        self.updateStatus()
 
     def openDictionary(self):
-        fname = QFileDialog.getOpenFileName(self, 'Eijiro csv file', self.ini_file.dic_dir)
+        fname = QFileDialog.getOpenFileName(self, 'Eijiro export file', self.ini_file.dic_file, "Text files (*.txt | *.csv)")
         if not fname[0]:
-            return
+            self.updateStatus()
+            return False
         if not self.vocabulary_files.ReadDictionaryFile(fname[0]):
             self.ShowErrorMessage("Dictionary Open Fail", self.vocabulary_files.error_message)
+            self.updateStatus()
+            return False
+        self.ini_file.set_new_dic_file(fname[0])
+        log.log("Dictionary file " + fname[0] + " read.")
+        self.updateStatus()
+        return True
+
+    def createTest(self):
+        if not (self.vocabulary_files.dictionary_text):
+            log.warn("Dictionary is empty when createTest was called.")
+            self.updateStatus()
             return
-        p = Path(fname[0]).parent
-        self.ini_file.set_new_dic_dir(str(p.absolute() ))
+        self.vocabulary_files.word_list = self.getWordsFromTable()
+        self.vocabulary_files.CreateTest(self.statusBar)
+        self.showQuiz()
+        self.updateStatus()
+        log.log("Quiz created successfully.")
+        QMessageBox.information(self, "Quiz Creation Report", self.vocabulary_files.report_text)
 
     def exportQuiz(self):
+        word_list, quiz = self.getQuizFromTable()
+        self.vocabulary_files.word_list = word_list
+        self.vocabulary_files.quiz = quiz
+        if not word_list:
+            self.showErrorMessage("Vocabulary word list is empty")
+            self.updateStatus()
+            return
         fname = QFileDialog.getSaveFileName(self, 'Export Anki Test File', self.ini_file.exp_dir)
         if not fname[0]:
             return
         if not self.vocabulary_files.ExportQuizFile(fname[0]):
             self.ShowErrorMessage("Quiz Export Fail", self.vocabulary_files.error_message)
             return
-        p = Path(fname[0]).parent
-        self.ini_file.set_new_exp_dir(str(p.absolute() ))
-        
+        parent_path = str(Path(fname[0]).parent.absolute())
+        self.ini_file.set_new_exp_dir(parent_path)
+        self.updateStatus()
+        log.log("Quiz exported to " + fname[0])
+
+    def getWordsFromTable(self):
+        rows = self.tableWidget.rowCount()
+        word_list = []
+        for row in range(rows):
+            word = self.tableWidget.item(row, 0).text()
+            word.strip(' ')
+            if word:
+                word_list.append(word)
+        return word_list
+
+    def getQuizFromTable(self):
+        rows = self.tableWidget.rowCount()
+        columns = self.tableWidget.columnCount()
+        word_list = []
+        quiz = {}
+        for row in range(rows):
+            word = self.tableWidget.item(row, 0).text()
+            word_list.append(word)
+            defs = []
+            for column in range(1, columns):
+                cell = self.tableWidget.item(row, column)
+                if cell is None:
+                    continue
+                definition = cell.text()
+                if definition:
+                    defs.append(definition)
+            quiz[word] = defs
+        return word_list, quiz
+    
     def ShowErrorMessage(self, title, error_text):
+        log.warn("Message box shown.\n" + title + ": " + error_text)
         QMessageBox.warning(self, title, error_text)
 
-    def createTest(self):
-        self.vocabulary_files.CreateTest()
+    def updateStatus(self):
+        if not self.vocabulary_files.dictionary_text:
+            self.statusBar.showMessage("Please load dictionary file.")
+            self.exportQuizAct.setDisabled(True)
+            self.createAct.setDisabled(True)
+        elif not self.vocabulary_files.word_list:
+            self.statusBar.showMessage("Please load the vocabulary list file.")
+            self.exportQuizAct.setDisabled(True)
+            self.createAct.setDisabled(True)
+        elif not self.vocabulary_files.quiz:
+            self.statusBar.showMessage("You can run create test.")
+            self.createAct.setDisabled(False)
+            self.exportQuizAct.setDisabled(True)
+        else:
+            self.statusBar.showMessage("You can export the quiz now.")
+            self.createAct.setDisabled(False)
+            self.exportQuizAct.setDisabled(False)
+
+    def showTable(self):
+        rows = len(self.vocabulary_files.word_list)
+        self.tableWidget.clear()
+        self.tableWidget.setRowCount(rows)
+        self.tableWidget.setColumnCount(2)
+        for index, word in enumerate(self.vocabulary_files.word_list):
+            self.tableWidget.setItem(index, 0, QTableWidgetItem(word))
+        self.update()
+ 
+    def showQuiz(self):
+        rows = len(self.vocabulary_files.quiz.keys())
+        self.tableWidget.setRowCount(rows)
+        self.tableWidget.setColumnCount(2)
+        for index, word in enumerate(self.vocabulary_files.word_list):
+            self.tableWidget.setItem(index, 0, QTableWidgetItem(word))
+            defs = self.vocabulary_files.quiz[word]
+            if (len(defs) + 1 > self.tableWidget.columnCount()):
+                self.tableWidget.setColumnCount(len(defs) + 1)
+            for def_index, definition in enumerate(defs):
+                self.tableWidget.setItem(index, 1 + def_index, QTableWidgetItem(definition))
+        self.update()
+    
+    def tryToReadDictionary(self):
+        if not self.vocabulary_files.ReadDictionaryFile(self.ini_file.dic_file):
+            self.openDictionary()
+        self.updateStatus()
 
     def myExitHandler(self):
         try:
             self.ini_file.writeIniFile()
         except IOError as e:
-            self.ShowErrorMessage("Ini File Access Error", str(e))
+            log.warn("Ini File Access Error\n" + str(e))
+        log.log("Application end.")
 
 
 if __name__ == '__main__':
