@@ -120,7 +120,7 @@ def switchCapitalization(word):
     else:
         result = word.capitalize()
     return result
-        
+
 def FindDefinitions(word, dic, start_point=0, remove_hints=False):
     REMOVE_LIST = [u'◆', u'\ ・', u'【変化】', u'【分節】', u'【＠】']
     
@@ -177,7 +177,7 @@ def ExtractWords(html_text):
         if index < 0:
             continue
         line = line[index + 22:]
-        index = line.find(u'</div>')
+        index = line.find(u'</')
         if index < 0:
             continue
         word = line[:index].rstrip(',').rstrip('.').rstrip()
